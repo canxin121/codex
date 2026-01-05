@@ -30,6 +30,8 @@ use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::stop_hooks::StopHooksConfig;
+use crate::stop_hooks::StopHooksToml;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -173,6 +175,9 @@ pub struct Config {
     ///
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
+
+    /// Stop hook configuration used when the model attempts to end a turn.
+    pub stop_hooks: StopHooksConfig,
 
     /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
     /// and turn completions when not focused.
@@ -698,6 +703,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub notify: Option<Vec<String>>,
 
+    /// Stop hook configuration for blocking or re-prompting on completion.
+    #[serde(default)]
+    pub stop_hooks: Option<StopHooksToml>,
+
     /// System instructions.
     pub instructions: Option<String>,
 
@@ -1212,6 +1221,7 @@ impl Config {
             .clone();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
+        let stop_hooks = StopHooksConfig::from_toml(cfg.stop_hooks.clone());
 
         let history = cfg.history.unwrap_or_default();
 
@@ -1326,6 +1336,7 @@ impl Config {
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
             notify: cfg.notify,
+            stop_hooks,
             user_instructions,
             base_instructions,
             developer_instructions,
@@ -3163,6 +3174,7 @@ model_verbosity = "high"
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
+                stop_hooks: StopHooksConfig::default(),
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: HashMap::new(),
@@ -3246,6 +3258,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            stop_hooks: StopHooksConfig::default(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
@@ -3344,6 +3357,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            stop_hooks: StopHooksConfig::default(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
@@ -3428,6 +3442,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            stop_hooks: StopHooksConfig::default(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
