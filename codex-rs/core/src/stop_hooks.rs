@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
@@ -6,11 +7,17 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::time::Instant;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time;
 use tracing::warn;
+
+use crate::protocol::StopHookEvent;
+use crate::protocol::StopHookEventDecision;
+use crate::protocol::StopHookEventStage;
+use crate::protocol::StopHookEventStatus;
 
 const DOT_CODEX_DIR: &str = ".codex";
 const HOOKS_DIR: &str = "hooks";
@@ -161,6 +168,17 @@ pub enum StopHookError {
     Json(#[from] serde_json::Error),
 }
 
+#[async_trait]
+pub trait StopHookEventSink: Send + Sync {
+    async fn emit(&self, event: StopHookEvent);
+}
+
+#[derive(Debug, Clone)]
+struct StopHookRunOutcome {
+    status: StopHookEventStatus,
+    output: Option<HookOutput>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 struct HooksFile {
     #[serde(default)]
@@ -245,11 +263,32 @@ struct HookInput {
     last_agent_message: Option<String>,
 }
 
-pub async fn evaluate_stop_hooks(ctx: StopHookContext) -> Result<StopHookDecision, StopHookError> {
+pub async fn evaluate_stop_hooks(
+    ctx: StopHookContext,
+    reporter: Option<&dyn StopHookEventSink>,
+) -> Result<StopHookDecision, StopHookError> {
     let hook_entries = collect_hook_entries(&ctx).await;
     if hook_entries.is_empty() {
         return Ok(StopHookDecision::Allow);
     }
+
+    let total = u32::try_from(hook_entries.len()).unwrap_or(u32::MAX);
+    emit_stop_hook_event(
+        reporter,
+        StopHookEvent {
+            stage: StopHookEventStage::Started,
+            hook_display: None,
+            index: None,
+            total: Some(total),
+            status: None,
+            decision: None,
+            reason: None,
+            system_message: None,
+            error: None,
+            duration_ms: None,
+        },
+    )
+    .await;
 
     let input = HookInput {
         hook_event_name: "stop",
@@ -266,51 +305,159 @@ pub async fn evaluate_stop_hooks(ctx: StopHookContext) -> Result<StopHookDecisio
     let payload = serde_json::to_vec(&input)?;
 
     let mut system_messages: Vec<String> = Vec::new();
-    for hook in hook_entries {
-        let result = match run_hook(&ctx, &hook, &payload).await {
-            Ok(result) => result,
+    for (idx, hook) in hook_entries.into_iter().enumerate() {
+        let index = u32::try_from(idx + 1).unwrap_or(u32::MAX);
+        let hook_display = hook.display();
+        emit_stop_hook_event(
+            reporter,
+            StopHookEvent {
+                stage: StopHookEventStage::HookStarted,
+                hook_display: Some(hook_display.clone()),
+                index: Some(index),
+                total: Some(total),
+                status: None,
+                decision: None,
+                reason: None,
+                system_message: None,
+                error: None,
+                duration_ms: None,
+            },
+        )
+        .await;
+
+        let started_at = Instant::now();
+        let outcome = match run_hook(&ctx, &hook, &payload).await {
+            Ok(outcome) => outcome,
             Err(err) => {
-                warn!("Stop hook execution failed for {}: {err}", hook.display());
+                warn!("Stop hook execution failed for {}: {err}", hook_display);
+                emit_stop_hook_event(
+                    reporter,
+                    StopHookEvent {
+                        stage: StopHookEventStage::HookFinished,
+                        hook_display: Some(hook_display),
+                        index: Some(index),
+                        total: Some(total),
+                        status: Some(StopHookEventStatus::Error),
+                        decision: None,
+                        reason: None,
+                        system_message: None,
+                        error: Some(err.to_string()),
+                        duration_ms: Some(elapsed_ms(started_at)),
+                    },
+                )
+                .await;
                 continue;
             }
         };
-        let Some(result) = result else {
-            continue;
-        };
-        if let Some(message) = result.system_message
-            && !message.trim().is_empty()
-        {
-            system_messages.push(message);
-        }
-        if let Some(decision) = result.decision {
-            match decision.to_ascii_lowercase().as_str() {
-                "block" => {
-                    let reason = result.reason.unwrap_or_default();
-                    if reason.trim().is_empty() {
-                        warn!(
-                            "Stop hook returned block without reason; ignoring: {}",
-                            hook.display()
-                        );
-                        continue;
+
+        let mut status = outcome.status;
+        let mut decision = None;
+        let mut error = None;
+        let mut block_reason = None;
+        if let Some(result) = outcome.output {
+            if let Some(message) = result.system_message
+                && !message.trim().is_empty()
+            {
+                system_messages.push(message);
+            }
+            if let Some(decision_raw) = result.decision {
+                match decision_raw.to_ascii_lowercase().as_str() {
+                    "block" => {
+                        let reason = result.reason.unwrap_or_default();
+                        if reason.trim().is_empty() {
+                            warn!(
+                                "Stop hook returned block without reason; ignoring: {}",
+                                hook_display
+                            );
+                            status = StopHookEventStatus::InvalidOutput;
+                            error = Some("block without reason".to_string());
+                        } else {
+                            decision = Some(StopHookEventDecision::Block);
+                            block_reason = Some(reason);
+                        }
                     }
-                    let system_message = combine_system_messages(system_messages);
-                    return Ok(StopHookDecision::Block {
-                        reason,
-                        system_message,
-                    });
-                }
-                "approve" => {
-                    continue;
-                }
-                _ => {
-                    warn!("Stop hook returned unknown decision: {}", decision);
-                    continue;
+                    "approve" => {
+                        decision = Some(StopHookEventDecision::Allow);
+                    }
+                    _ => {
+                        warn!("Stop hook returned unknown decision: {decision_raw}");
+                        status = StopHookEventStatus::InvalidOutput;
+                        error = Some(format!("unknown decision: {decision_raw}"));
+                    }
                 }
             }
         }
+
+        emit_stop_hook_event(
+            reporter,
+            StopHookEvent {
+                stage: StopHookEventStage::HookFinished,
+                hook_display: Some(hook_display.clone()),
+                index: Some(index),
+                total: Some(total),
+                status: Some(status),
+                decision,
+                reason: block_reason.clone(),
+                system_message: None,
+                error,
+                duration_ms: Some(elapsed_ms(started_at)),
+            },
+        )
+        .await;
+
+        if let Some(reason) = block_reason {
+            let system_message = combine_system_messages(system_messages);
+            emit_stop_hook_event(
+                reporter,
+                StopHookEvent {
+                    stage: StopHookEventStage::Completed,
+                    hook_display: None,
+                    index: None,
+                    total: Some(total),
+                    status: None,
+                    decision: Some(StopHookEventDecision::Block),
+                    reason: Some(reason.clone()),
+                    system_message: system_message.clone(),
+                    error: None,
+                    duration_ms: None,
+                },
+            )
+            .await;
+            return Ok(StopHookDecision::Block {
+                reason,
+                system_message,
+            });
+        }
     }
 
+    emit_stop_hook_event(
+        reporter,
+        StopHookEvent {
+            stage: StopHookEventStage::Completed,
+            hook_display: None,
+            index: None,
+            total: Some(total),
+            status: None,
+            decision: Some(StopHookEventDecision::Allow),
+            reason: None,
+            system_message: None,
+            error: None,
+            duration_ms: None,
+        },
+    )
+    .await;
+
     Ok(StopHookDecision::Allow)
+}
+
+async fn emit_stop_hook_event(reporter: Option<&dyn StopHookEventSink>, event: StopHookEvent) {
+    if let Some(reporter) = reporter {
+        reporter.emit(event).await;
+    }
+}
+
+fn elapsed_ms(started_at: Instant) -> u64 {
+    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 async fn collect_hook_entries(ctx: &StopHookContext) -> Vec<HookEntry> {
@@ -429,9 +576,12 @@ async fn run_hook(
     ctx: &StopHookContext,
     hook: &HookEntry,
     payload: &[u8],
-) -> Result<Option<HookOutput>, StopHookError> {
+) -> Result<StopHookRunOutcome, StopHookError> {
     let Some(command) = hook.command.as_ref() else {
-        return Ok(None);
+        return Ok(StopHookRunOutcome {
+            status: StopHookEventStatus::InvalidOutput,
+            output: None,
+        });
     };
 
     let timeout = hook
@@ -470,7 +620,10 @@ async fn run_hook(
         Ok(result) => result?,
         Err(_) => {
             warn!("Stop hook timed out: {}", hook.display());
-            return Ok(None);
+            return Ok(StopHookRunOutcome {
+                status: StopHookEventStatus::Timeout,
+                output: None,
+            });
         }
     };
 
@@ -480,21 +633,33 @@ async fn run_hook(
             output.status.code(),
             hook.display()
         );
-        return Ok(None);
+        return Ok(StopHookRunOutcome {
+            status: StopHookEventStatus::ExitFailure,
+            output: None,
+        });
     }
 
     if output.stdout.is_empty() {
-        return Ok(None);
+        return Ok(StopHookRunOutcome {
+            status: StopHookEventStatus::NoOutput,
+            output: None,
+        });
     }
 
     let parsed: HookOutput = match serde_json::from_slice(&output.stdout) {
         Ok(parsed) => parsed,
         Err(err) => {
             warn!("Stop hook output invalid JSON: {err}");
-            return Ok(None);
+            return Ok(StopHookRunOutcome {
+                status: StopHookEventStatus::InvalidOutput,
+                output: None,
+            });
         }
     };
-    Ok(Some(parsed))
+    Ok(StopHookRunOutcome {
+        status: StopHookEventStatus::Ok,
+        output: Some(parsed),
+    })
 }
 
 fn combine_system_messages(messages: Vec<String>) -> Option<String> {
@@ -677,7 +842,7 @@ echo '{"decision":"block","reason":"repeat","systemMessage":"loop"}'
             stop_hooks: StopHooksConfig::default(),
         };
 
-        let decision = evaluate_stop_hooks(ctx).await.expect("hook run");
+        let decision = evaluate_stop_hooks(ctx, None).await.expect("hook run");
         assert_eq!(
             decision,
             StopHookDecision::Block {

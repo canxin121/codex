@@ -66,6 +66,21 @@ Notes:
 - `enabled = false` skips a source.
 - `include_project_hooks = true` keeps the `.codex/hooks/hooks.json` discovery behavior.
 
+## TUI Visibility
+
+Stop hook activity can be surfaced in the TUI via the `[tui]` config section:
+
+```toml
+[tui]
+stop_hook_visibility = "status"
+```
+
+Values:
+- `off`: no UI output
+- `status` (default): show a status-line update while hooks run
+- `summary`: status-line updates + a final summary line
+- `verbose`: status-line updates + per-hook history lines
+
 ## Hook Input (stdin JSON)
 
 The Stop hook receives a JSON object on stdin:

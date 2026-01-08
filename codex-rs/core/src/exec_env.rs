@@ -1,7 +1,7 @@
 use crate::config::types::EnvironmentVariablePattern;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyInherit;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
@@ -23,7 +23,7 @@ pub fn create_env(policy: &ShellEnvironmentPolicy) -> HashMap<String, String> {
 
 pub fn insert_session_env(
     env: &mut HashMap<String, String>,
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     turn_id: &str,
     cwd: &Path,
 ) {
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn insert_session_env_sets_conversation_and_turn_ids() {
-        let conversation_id = ConversationId::default();
+        let conversation_id = ThreadId::default();
         let mut env = HashMap::new();
         let turn_id = "turn-123".to_string();
         let cwd = PathBuf::from("/tmp/codex");

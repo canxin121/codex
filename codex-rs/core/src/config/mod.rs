@@ -11,6 +11,7 @@ use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ScrollInputMode;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
+use crate::config::types::StopHookVisibility;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
 use crate::config_loader::ConfigLayerStack;
@@ -188,6 +189,9 @@ pub struct Config {
 
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
+
+    /// Controls how Stop hook activity is displayed in the TUI.
+    pub tui_stop_hook_visibility: StopHookVisibility,
 
     /// Override the events-per-wheel-tick factor for TUI2 scroll normalization.
     ///
@@ -1421,6 +1425,11 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            tui_stop_hook_visibility: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.stop_hook_visibility)
+                .unwrap_or_default(),
             tui_scroll_events_per_tick: cfg.tui.as_ref().and_then(|t| t.scroll_events_per_tick),
             tui_scroll_wheel_lines: cfg.tui.as_ref().and_then(|t| t.scroll_wheel_lines),
             tui_scroll_trackpad_lines: cfg.tui.as_ref().and_then(|t| t.scroll_trackpad_lines),
@@ -1621,6 +1630,7 @@ persistence = "none"
                 notifications: Notifications::Enabled(true),
                 animations: true,
                 show_tooltips: true,
+                stop_hook_visibility: StopHookVisibility::Status,
                 scroll_events_per_tick: None,
                 scroll_wheel_lines: None,
                 scroll_trackpad_lines: None,
@@ -3237,6 +3247,7 @@ model_verbosity = "high"
                 animations: true,
                 show_tooltips: true,
                 analytics: true,
+                tui_stop_hook_visibility: StopHookVisibility::Status,
                 tui_scroll_events_per_tick: None,
                 tui_scroll_wheel_lines: None,
                 tui_scroll_trackpad_lines: None,
@@ -3322,6 +3333,7 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             analytics: true,
+            tui_stop_hook_visibility: StopHookVisibility::Status,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
@@ -3422,6 +3434,7 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             analytics: false,
+            tui_stop_hook_visibility: StopHookVisibility::Status,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
@@ -3508,6 +3521,7 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             analytics: true,
+            tui_stop_hook_visibility: StopHookVisibility::Status,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,

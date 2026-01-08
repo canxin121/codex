@@ -116,6 +116,7 @@ use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::SkillErrorInfo;
 use crate::protocol::SkillMetadata as ProtocolSkillMetadata;
+use crate::protocol::StopHookEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
@@ -2292,6 +2293,20 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
         .collect()
 }
 
+struct StopHookEventEmitter<'a> {
+    session: &'a Session,
+    turn_context: &'a TurnContext,
+}
+
+#[async_trait::async_trait]
+impl stop_hooks::StopHookEventSink for StopHookEventEmitter<'_> {
+    async fn emit(&self, event: StopHookEvent) {
+        self.session
+            .send_event(self.turn_context, EventMsg::StopHookEvent(event))
+            .await;
+    }
+}
+
 /// Takes a user message as input and runs a loop where, at each turn, the model
 /// replies with either:
 ///
@@ -2425,7 +2440,11 @@ pub(crate) async fn run_task(
                         last_agent_message: last_agent_message.clone(),
                         stop_hooks: turn_context.stop_hooks.clone(),
                     };
-                    match stop_hooks::evaluate_stop_hooks(hook_ctx).await {
+                    let hook_reporter = StopHookEventEmitter {
+                        session: sess.as_ref(),
+                        turn_context: turn_context.as_ref(),
+                    };
+                    match stop_hooks::evaluate_stop_hooks(hook_ctx, Some(&hook_reporter)).await {
                         Ok(stop_hooks::StopHookDecision::Block {
                             reason,
                             system_message,
