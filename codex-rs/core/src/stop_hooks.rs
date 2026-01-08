@@ -192,12 +192,12 @@ impl<'de> Deserialize<'de> for StopHookItem {
     {
         let value = serde_json::Value::deserialize(deserializer)?;
         if value.get("hooks").is_some() {
-            let group: HookGroup = serde_json::from_value(value)
-                .map_err(serde::de::Error::custom)?;
+            let group: HookGroup =
+                serde_json::from_value(value).map_err(serde::de::Error::custom)?;
             Ok(StopHookItem::Group(group))
         } else {
-            let entry: HookEntry = serde_json::from_value(value)
-                .map_err(serde::de::Error::custom)?;
+            let entry: HookEntry =
+                serde_json::from_value(value).map_err(serde::de::Error::custom)?;
             Ok(StopHookItem::Entry(entry))
         }
     }

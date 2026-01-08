@@ -23,3 +23,11 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 Codex can run **Stop hooks** when the model is about to finish a turn. Hooks can approve or block completion and optionally inject a follow‑up prompt in the same session.
 
 See `docs/stop-hooks.md` for configuration and payload details (including `config.toml`).
+
+## Tool environment variables
+
+When Codex runs shell-based tools (for example `shell`, `local_shell`, or `exec_command`), it injects:
+
+- `CODEX_CONVERSATION_ID` (the session/window id)
+- `CODEX_TURN_ID` (the current turn id)
+- `CODEX_CWD` (the resolved working directory for the command)
